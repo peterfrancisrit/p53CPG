@@ -2,13 +2,23 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib as mpl
 import seaborn as sns
 import pymc3 as pm
+from collections import OrderedDict
+from bokeh.plotting import figure, output_file, show
+from bokeh.layouts import column, row
+from bokeh.palettes import Dark2_5 as palette
+from bokeh.models import BoxAnnotation
+import itertools
+
 
 ''' INITIALISE PARAMATERS '''
-window = 250 # tested a few, this seemed quite good
-n_samples = 5000 # 5000 was a base
+window = 50 # tested a few, this seemed quite good
+n_samples = 10000 # 5000 was a base
 filename = ["p53.fasta", "p53_zebra.fasta","p53_platy.fasta"]
+data = OrderedDict()
+
 
 def read_file(filename):
     '''
@@ -76,8 +86,8 @@ def model(gene,n_samples):
         switch = pm.DiscreteUniform('switch', lower=min(data.index), upper=max(data.index), testval=data.val.mean())
 
         # Priors for pre- and post-switch rates number of disasters
-        first = pm.Exponential('initial',1)
-        second = pm.Exponential('second',1)
+        first = pm.HalfCauchy('initial',1)
+        second = pm.HalfCauchy('second',1)
 
         # Allocate appropriate Poisson rates to years before and after current
         change = pm.math.switch(switch >= data.index, first, second)
@@ -87,49 +97,52 @@ def model(gene,n_samples):
         trace = pm.sample(n_samples,tune=5000)
         return trace
 
-def plot_windows(gene,fig,ax,label):
+def run_model(data):
+    result = [model(data[d][0],n_samples) for d in data]
+    for i in result:
+        pm.traceplot(i)
+        pm.autocorrplot(i)
+    plt.show()
+
+def plot_windows(data):
     '''
     Plotting the windows in terms of counts with "hypothesise split"
-    param: gene -> count data np.array()
-    param: fig -> fig from plot
-    param: ax -> ax properties from plot
-    param: label -> string to name individual plots
+    param: data -> ([array of counts], [array of range length])
     '''
 
-    # Plotting the windows against cpg content and normalized
-    data = pd.DataFrame()
-    data['x'] = range(len(gene))
-    data['y'] = gene / len(gene)
+    output_file("scatter.html")
+    p = figure(title="CpG Content of p53",)
+    p.background_fill_color = "grey"
+    p.background_fill_alpha = 0.2
+    p.add_layout(BoxAnnotation(left=40, right=160,fill_alpha=0.2, fill_color='blue'))
+    colors = itertools.cycle(palette)
+    for i , color in zip(data, colors):
+        if i == 'Platypus':
+            pp = figure()
+            pp.circle(data[i][1],data[i][0],alpha=0.5,legend_label=i,color=color)
+            pp.background_fill_color = "grey"
+            pp.background_fill_alpha = 0.2
+            pp.add_layout(BoxAnnotation(left=5, right=12,fill_alpha=0.2, fill_color='blue'))
+        else:
+            p.circle(data[i][1],data[i][0],alpha=0.8,color=color,legend_label=i)
+    show(row(p,pp))
 
-    if label == "Platypus":
-        sns.regplot('x','y',data=data,label=label,ax=ax)
-    else:
-        sns.regplot('x','y',data=data,label=label,ax=ax)
-        ax.axvspan(10, 30, alpha=0.05, color='black')
-        ax.axvspan(15, 25, alpha=0.1, color='black')
-        ax.axvline(20,0,1,ls='--',color='black')
-
-
-    fig.suptitle("CpG Content of p53 + Estimated Switch (around 20)")
-    ax.set_xlabel("Window | window length = {}".format(window))
-    ax.set_ylabel("CpG count")
-    fig.legend()
-
-
-
-def plot_histogram(gene,fig,ax,label):
+def plot_histogram(data):
     '''
     Plotting the histogram
-    param: gene -> count data np.array()
-    param: fig -> fig properties from plot
-    param: ax -> ax properties from plot
-    param: label -> string for label name
+    param: data -> ([array of count], [array of range len])
     '''
-    fig.suptitle("CpG Content of p53 | Window = {}".format(window))
-    ax = sns.distplot(gene / len(gene),label=label,kde=False)
-    ax.set_xlabel(f"CpG count per window = {window}")
-    ax.set_ylabel("CpGs count")
-    fig.legend()
+    output_file("histogram.html")
+    p = figure(title="CpG Content of p53",width=400,height=400)
+    p.background_fill_color = "grey"
+    p.background_fill_alpha = 0.2
+    colors = itertools.cycle(palette)
+    for i , color in zip(data, colors):
+        hist, edges = np.histogram(data[i][0], density=True)
+        p.quad(top=hist, bottom=0, left=edges[:-1], right=edges[1:],
+           color=color, alpha=0.5,legend_label=i)
+    show(p)
+
 
 def plot_final(gene,trace,label):
     '''
@@ -149,7 +162,7 @@ def plot_final(gene,trace,label):
     plt.ylabel("Normalized CpG Count ", fontsize=16)
     plt.xlabel("Windows | window length = {}".format(window), fontsize=16)
 
-    plt.vlines(trace['switch'].mean(), data['val'].min(), data['val'].max(), color='C1')
+    plt.vlines(trace['switch'].mean(), data['val'].min(), data['val'].max(), color='black')
     average_cpg = np.zeros_like(data['val'], dtype='float')
     for i, sub in enumerate(data.index):
         idx = sub < trace['switch']
@@ -157,8 +170,8 @@ def plot_final(gene,trace,label):
 
     sp_hpd = pm.hpd(trace['switch'])
     plt.fill_betweenx(y=[data.val.min(), data.val.max()],
-                      x1=sp_hpd[0], x2=sp_hpd[1], alpha=0.5, color='C1');
-    plt.plot(data.index, average_cpg,  'k--', lw=2);
+                      x1=sp_hpd[0], x2=sp_hpd[1], alpha=0.2, color='black');
+    plt.plot(data.index, average_cpg,  'k--', lw=2,color='r');
 
 ''' READ '''
 header_human, sequence_human = read_file(filename[0])
@@ -166,39 +179,21 @@ header_fish, sequence_fish = read_file(filename[1])
 header_plat, sequence_plat = read_file(filename[2])
 
 ''' COUNT '''
-cg_human = window_cg(sequence_human, window) # let's start with 250
-cg_fish = window_cg(sequence_fish, window)
-cg_plat = window_cg(sequence_plat, window)
+data['Human'] = (window_cg(sequence_human, window), list(range(len(window_cg(sequence_human, window)))))
+data['Zebrafish'] = (window_cg(sequence_fish, window), list(range(len(window_cg(sequence_fish, window)))))
+data['Platypus'] = (window_cg(sequence_plat, window), list(range(len(window_cg(sequence_plat,window)))))
+
 
 ''' INITIAL PLOTTING '''
-sns.set_style("dark")
-sns.set_palette(["#3498db", "#e74c3c", "#2ecc71"])
 
-fig, ax = plt.subplots(2,1,figsize=(8,8))
-plot_windows(cg_human,fig,ax[0],"Human")
-plot_windows(cg_fish,fig,ax[0],"Zebrafish")
-plot_windows(cg_plat,fig,ax[1],"Platypus")
-
-fig, ax = plt.subplots(figsize=(8,8))
-plot_histogram(cg_human,fig,ax,"Human")
-plot_histogram(cg_fish,fig,ax,"Zebrafish")
-plot_histogram(cg_plat,fig,ax,"Platypus")
-
+plot_windows(data)
+plot_histogram(data)
 
 ''' MODELLING '''
-trace_human = model(cg_human,n_samples)
-trace_fish = model(cg_fish,n_samples)
-trace_plat = model(cg_plat,n_samples)
-pm.traceplot(trace_human)
-pm.traceplot(trace_fish)
-pm.traceplot(trace_plat)
-pm.autocorrplot(trace_human, ['switch','initial','second']);
-pm.autocorrplot(trace_fish, ['switch','initial','second']);
-pm.autocorrplot(trace_plat, ['switch','initial','second']);
-
-''' FINAL PLOTTING '''
-plot_final(cg_human,trace_human,"Human")
-plot_final(cg_fish,trace_fish,"Zebrafish")
-plot_final(cg_plat,trace_plat,"Platypus")
-
-plt.show()
+# run_model(data)
+# ''' FINAL PLOTTING '''
+# plot_final(cg_human,trace_human,"Human")
+# plot_final(cg_fish,trace_fish,"Zebrafish")
+# plot_final(cg_plat,trace_plat,"Platypus")
+#
+# plt.show()
