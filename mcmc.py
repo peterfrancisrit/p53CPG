@@ -104,6 +104,8 @@ def run_model(data):
         pm.autocorrplot(i)
     plt.show()
 
+    return result
+
 def plot_windows(data):
     '''
     Plotting the windows in terms of counts with "hypothesise split"
@@ -111,14 +113,17 @@ def plot_windows(data):
     '''
 
     output_file("scatter.html")
-    p = figure(title="CpG Content of p53",)
+    p = figure(title="CpG Content of p53 of Human and Zebrafish",height=800,width=800,
+    x_axis_label='Window Length | window = {}'.format(window),
+    y_axis_label='CpG Count')
+
     p.background_fill_color = "grey"
     p.background_fill_alpha = 0.2
     p.add_layout(BoxAnnotation(left=40, right=160,fill_alpha=0.2, fill_color='blue'))
     colors = itertools.cycle(palette)
     for i , color in zip(data, colors):
         if i == 'Platypus':
-            pp = figure()
+            pp = figure(title="CpG Content of p53 of {}".format(i),width=800,height=800)
             pp.circle(data[i][1],data[i][0],alpha=0.5,legend_label=i,color=color)
             pp.background_fill_color = "grey"
             pp.background_fill_alpha = 0.2
@@ -133,7 +138,10 @@ def plot_histogram(data):
     param: data -> ([array of count], [array of range len])
     '''
     output_file("histogram.html")
-    p = figure(title="CpG Content of p53",width=400,height=400)
+    p = figure(title="CpG Content of p53",height=800,width=800,
+    x_axis_label='CpG Count Bins'.format(window),
+    y_axis_label='|CpG Count|')
+
     p.background_fill_color = "grey"
     p.background_fill_alpha = 0.2
     colors = itertools.cycle(palette)
@@ -144,34 +152,32 @@ def plot_histogram(data):
     show(p)
 
 
-def plot_final(gene,trace,label):
+def plot_final(data,traces):
     '''
     Function to visualise the switch point from the sample
-    param: gene -> counts of cpg form np.array()
-    param: trace -> the trace from the fitted PyMC3 Model
-    param: label -> string for plot label name
+    param: data -> counts of cpg form np.array()
+    param: trace -> from the PyMC3 model
     '''
-
-    # create empty dataframe
-    data = pd.DataFrame()
-    data['val'] = gene
-
-    plt.figure(figsize=(10, 8))
-    plt.title("CpG Count of {} p53".format(label))
-    plt.plot(data.index, data['val'], '.')
-    plt.ylabel("Normalized CpG Count ", fontsize=16)
-    plt.xlabel("Windows | window length = {}".format(window), fontsize=16)
-
-    plt.vlines(trace['switch'].mean(), data['val'].min(), data['val'].max(), color='black')
-    average_cpg = np.zeros_like(data['val'], dtype='float')
-    for i, sub in enumerate(data.index):
-        idx = sub < trace['switch']
-        average_cpg[i] = (trace['initial'][idx].sum() + trace['second'][~idx].sum()) / (len(trace) * trace.nchains)
-
-    sp_hpd = pm.hpd(trace['switch'])
-    plt.fill_betweenx(y=[data.val.min(), data.val.max()],
-                      x1=sp_hpd[0], x2=sp_hpd[1], alpha=0.2, color='black');
-    plt.plot(data.index, average_cpg,  'k--', lw=2,color='r');
+    plots = []
+    colors = itertools.cycle(palette)
+    for i, trace, color in zip(data, traces, colors):
+        p = figure(title="CpG Count of {} p53 with switchpoint".format(i),
+        x_axis_label='Window Length | window = 50',
+        y_axis_label='CpG Count')
+        p.background_fill_color = "grey"
+        p.background_fill_alpha = 0.2
+        p.circle(data[i][1], data[i][0],color=color)
+        p.line(x=[trace['switch'].mean(),trace['switch'].mean()],
+        y=[data[i][0].min(),data[i][0].max()], color='black',line_dash='dashed',alpha=0.7)
+        average_cpg = np.zeros_like(data[i][0], dtype='float')
+        for j, sub in enumerate(data[i][1]):
+            idx = sub < trace['switch']
+            average_cpg[j] = (trace['initial'][idx].sum() + trace['second'][~idx].sum()) / (len(trace) * trace.nchains)
+        sp_hpd = pm.hpd(trace['switch'])
+        p.add_layout(BoxAnnotation(left=sp_hpd[0], right=sp_hpd[1],fill_alpha=0.2, fill_color='blue'))
+        p.line(x=data[i][1], y=average_cpg, line_dash='dashed',color='black',line_width=2);
+        plots.append(p)
+    show(column(*plots))
 
 ''' READ '''
 header_human, sequence_human = read_file(filename[0])
@@ -185,15 +191,11 @@ data['Platypus'] = (window_cg(sequence_plat, window), list(range(len(window_cg(s
 
 
 ''' INITIAL PLOTTING '''
-
 plot_windows(data)
 plot_histogram(data)
 
 ''' MODELLING '''
-# run_model(data)
-# ''' FINAL PLOTTING '''
-# plot_final(cg_human,trace_human,"Human")
-# plot_final(cg_fish,trace_fish,"Zebrafish")
-# plot_final(cg_plat,trace_plat,"Platypus")
-#
-# plt.show()
+traces = run_model(data)
+
+''' FINAL PLOTTING '''
+plot_final(data,traces)
